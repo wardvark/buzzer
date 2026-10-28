@@ -2759,6 +2759,7 @@ function runTeam(me) {
   const bz = $("#bz"), msg = $("#tmsg");
   let st = null, penUntil = 0, pressedRound = -1, lastV = 0;
   const rtts = [];
+  let upNow = 0;
   const myName = () => { const t = st && st.teams.find(x => x.id === teamParam); return t ? t.name : teamParam.replace(/-/g, " ").replace(/\b\w/g, c => c.toUpperCase()); };
   const nameOf = id => { const t = st && st.teams.find(x => x.id === id); return t ? t.name : id; };
   const ord = n => n + (["th", "st", "nd", "rd"][(n % 100 - 20) % 10] || ["th", "st", "nd", "rd"][n % 100] || "th");
@@ -2767,7 +2768,7 @@ function runTeam(me) {
   const bus = makeBus({
     multi: false,
     subs: [base + "state", base + "ev/" + teamParam, base + "ping/" + dev],
-    onStatus: connPill($("#tconn")),
+    onStatus: (up, total) => { upNow = up; connPill($("#tconn"))(up, total); },
     onConnect: () => { sendHb(); sendPing(); },
     onMsg(topic, payload) {
       let m; try { m = JSON.parse(payload); } catch (e) { return; }
@@ -2814,7 +2815,7 @@ function runTeam(me) {
     return view("locked", "WAIT", "Buzzers are locked.");
   }
   paint();
-  setTimeout(() => { if (!st) msg.textContent = "Can't reach the host yet. Check the room code and your connection."; }, 6000);
+  setTimeout(() => { if (!st) msg.textContent = upNow ? "Connected, but the host hasn't opened the game yet. Ask the host to open the host page (index.html?host)." : "Can't reach the buzzer service from this network. Try another network or your phone's data."; }, 6000);
 
   let wl = null;
   async function wake() { try { wl = await navigator.wakeLock.request("screen"); } catch (e) {} }
