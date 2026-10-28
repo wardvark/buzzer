@@ -89,8 +89,6 @@ label.f{display:block;font-size:13px;color:var(--mute);margin:10px 0 4px}
 #bz.locked{background:var(--line);color:var(--mute);box-shadow:0 8px 0 rgba(0,0,0,.08)}
 #bz.up{background:var(--yellow);color:var(--ink)}
 #bz.later{background:#fff;color:var(--blue);border:6px solid var(--blue)}
-#bz.pen{background:var(--red)}
-#bz.out{background:#fff;color:var(--mute);border:6px dashed var(--line);box-shadow:none}
 #team .msg{min-height:3.2em;text-align:center;padding:0 20px 18px;font-size:18px;color:var(--ink)}
 </style>
 </head>
@@ -126,8 +124,7 @@ label.f{display:block;font-size:13px;color:var(--mute);margin:10px 0 4px}
         <span class="grow" style="flex:1"></span>
         <span>Buzzers: <span id="state" class="locked">locked</span></span>
       </div>
-      <p class="hint" style="margin:10px 0 0">Keys: <b>L</b> open / lock &nbsp;·&nbsp; <b>Space</b> next clue (clears the order and locks). Open buzzers when you finish reading the clue.</p>
-      <p class="hint" id="early" style="margin:6px 0 0;min-height:1.2em"></p>
+      <p class="hint" style="margin:10px 0 0">Keys: <b>L</b> open / lock &nbsp;·&nbsp; <b>Space</b> next clue (clears the order and locks). Open buzzers when you finish reading the clue. Only the first team answers; later buzzes are just logged.</p>
     </div>
 
     <div class="card">
@@ -141,10 +138,6 @@ label.f{display:block;font-size:13px;color:var(--mute);margin:10px 0 4px}
       <div class="row" style="margin-top:10px">
         <input type="text" id="newTeam" placeholder="Add a team" style="flex:1" maxlength="30">
         <button class="btn" id="addTeam">Add</button>
-      </div>
-      <div class="row" style="margin-top:14px">
-        <label><input type="checkbox" id="penOn"> Early buzz penalty</label>
-        <input type="number" id="penMs" min="1" max="30" step="1" style="width:80px"> <span class="hint">seconds</span>
       </div>
     </div>
 
@@ -2590,13 +2583,13 @@ function runHost() {
   $("#hroom").textContent = room;
   const key = "fwbuzz-host-" + room;
   const saved = lsGet(key);
-  const S = saved ? saved.S : { teams: DEFAULT_TEAMS.reduce((a, n) => (a.push({ id: uniqueId(n, a), name: n }), a), []), open: false, round: 1, out: [], order: [], v: 0 };
-  const set = saved ? saved.set : { pen: true, penMs: 3, url: "" };
+  const S = saved ? saved.S : { teams: DEFAULT_TEAMS.reduce((a, n) => (a.push({ id: uniqueId(n, a), name: n }), a), []), open: false, round: 1, order: [], v: 0 };
+  const set = saved ? saved.set : { url: "" };
   const persist = () => lsSet(key, { S, set });
   const t0 = performance.now();
   let buzzes = S.order.map(o => ({ t: o.t, p: o.p, eff: t0 + o.d }));
   const seen = new Set(), lastSeen = {};
-  let adopted = !!saved || S.teams.length > 0, settle = null, earlyTimer = null;
+  let adopted = !!saved || S.teams.length > 0, settle = null;
   const nameOf = id => (S.teams.find(t => t.id === id) || { name: id }).name;
 
   const bus = makeBus({
@@ -2610,7 +2603,7 @@ function runHost() {
       else if (topic === base + "hb") { lastSeen[m.t] = Date.now(); paintPresence(); }
       else if (topic === base + "state" && !adopted && Array.isArray(m.teams) && m.teams.length) {
         adopted = true;
-        Object.assign(S, { teams: m.teams, open: m.open, round: m.round, out: m.out || [], order: m.order || [], v: m.v || 0 });
+        Object.assign(S, { teams: m.teams, open: m.open, round: m.round, order: m.order || [], v: m.v || 0 });
         const n = performance.now();
         buzzes = S.order.map(o => ({ t: o.t, p: o.p, eff: n + o.d }));
         persist(); renderAll();
@@ -2618,7 +2611,7 @@ function runHost() {
     }
   });
 
-  function pubState() { return { v: S.v, room, teams: S.teams, open: S.open, round: S.round, out: S.out, order: S.order }; }
+  function pubState() { return { v: S.v, room, teams: S.teams, open: S.open, round: S.round, order: S.order }; }
   function publish() {
     S.order = buzzes.map(b => ({ t: b.t, p: b.p, d: Math.round(b.eff - buzzes[0].eff) }));
     S.v = Math.max(S.v + 1, Date.now());
@@ -2634,15 +2627,8 @@ function runHost() {
   function onBuzz(m) {
     if (!m || seen.has(m.id)) return; seen.add(m.id);
     if (m.r !== S.round) return;
-    if (!S.open) {
-      if (set.pen) {
-        bus.pub(base + "ev/" + m.t, JSON.stringify({ type: "pen", ms: set.penMs * 1000 }), { qos: 1 });
-        $("#early").textContent = `Early buzz: ${m.p || ""} (${nameOf(m.t)}), locked out ${set.penMs}s`;
-        clearTimeout(earlyTimer); earlyTimer = setTimeout(() => { $("#early").textContent = ""; }, 4000);
-      }
-      return;
-    }
-    if (S.out.includes(m.t) || buzzes.some(b => b.t === m.t)) return;
+    if (!S.open) return;
+    if (buzzes.some(b => b.t === m.t)) return;
     const lat = Math.min(Math.max(+m.lat || 0, 0), 400);
     buzzes.push({ t: m.t, p: String(m.p || "").slice(0, 20), eff: performance.now() - lat });
     buzzes.sort((a, b) => a.eff - b.eff);
@@ -2652,13 +2638,8 @@ function runHost() {
   /* controls */
   function toggle() { S.open = !S.open; publish(); }
   function next() {
-    S.round++; S.out = []; S.open = false; buzzes = [];
+    S.round++; S.open = false; buzzes = [];
     if (settle) { clearTimeout(settle); settle = null; }
-    publish();
-  }
-  function wrong(id) {
-    buzzes = buzzes.filter(b => b.t !== id);
-    if (!S.out.includes(id)) S.out.push(id);
     publish();
   }
   $("#btnToggle").onclick = toggle;
@@ -2677,15 +2658,13 @@ function runHost() {
   }
   function renderOrder() {
     const box = $("#order"); box.replaceChildren();
-    if (!S.order.length && !S.out.length) { box.append(h("div", { class: "empty" }, S.open ? "Waiting for a buzz…" : "Buzzers are locked.")); return; }
+    if (!S.order.length) { box.append(h("div", { class: "empty" }, S.open ? "Waiting for a buzz…" : "Buzzers are locked.")); return; }
     S.order.forEach((o, i) => {
       box.append(h("div", { class: "item" + (i === 0 ? " first" : "") },
         h("span", { class: "rank" }, i + 1),
         h("span", { class: "nm" }, nameOf(o.t), o.p ? h("small", {}, "  " + o.p) : null),
-        h("span", { class: "dl" }, i === 0 ? "" : "+" + (o.d / 1000).toFixed(2) + "s"),
-        h("button", { class: "btn warn", title: "Wrong answer: lock this team out for the clue", onclick: () => wrong(o.t) }, "Wrong")));
+        h("span", { class: "dl" }, i === 0 ? "answering" : "+" + (o.d / 1000).toFixed(2) + "s")));
     });
-    S.out.forEach(id => box.append(h("div", { class: "item" }, h("span", { class: "rank" }, "×"), h("span", { class: "nm" }, nameOf(id)), h("span", { class: "dl" }, "locked out"))));
   }
   const joinUrl = () => set.url ? set.url + (room === DEFAULT_ROOM ? "" : "?room=" + room) : "";
   function renderTeams() {
@@ -2728,9 +2707,6 @@ function runHost() {
     S.teams.push({ id: uniqueId(n, S.teams), name: n }); $("#newTeam").value = "";
     publish(); renderTeams();
   }
-  $("#penOn").checked = set.pen; $("#penMs").value = set.penMs;
-  $("#penOn").onchange = e => { set.pen = e.target.checked; persist(); };
-  $("#penMs").onchange = e => { set.penMs = Math.min(30, Math.max(1, +e.target.value || 3)); e.target.value = set.penMs; persist(); };
   if (!set.url && /^https?:$/.test(location.protocol)) set.url = location.origin + location.pathname;
   $("#pubUrl").value = set.url;
   $("#pubUrl").onchange = e => { set.url = e.target.value.trim().split("?")[0]; persist(); renderUrl(); renderQr(); };
@@ -2757,7 +2733,7 @@ function runTeam(me) {
   $("#pl").textContent = me.name;
   $("#chg").onclick = () => { try { localStorage.removeItem("fwbuzz-me-" + room); } catch (e) {} location.reload(); };
   const bz = $("#bz"), msg = $("#tmsg");
-  let st = null, penUntil = 0, pressedRound = -1, lastV = 0;
+  let st = null, pressedRound = -1, lastV = 0;
   const rtts = [];
   let upNow = 0;
   const myName = () => { const t = st && st.teams.find(x => x.id === teamParam); return t ? t.name : teamParam.replace(/-/g, " ").replace(/\b\w/g, c => c.toUpperCase()); };
@@ -2767,13 +2743,12 @@ function runTeam(me) {
 
   const bus = makeBus({
     multi: false,
-    subs: [base + "state", base + "ev/" + teamParam, base + "ping/" + dev],
+    subs: [base + "state", base + "ping/" + dev],
     onStatus: (up, total) => { upNow = up; connPill($("#tconn"))(up, total); },
     onConnect: () => { sendHb(); sendPing(); },
     onMsg(topic, payload) {
       let m; try { m = JSON.parse(payload); } catch (e) { return; }
       if (topic === base + "state") { if (m.v >= lastV) { lastV = m.v; st = m; $("#tname").textContent = myName(); paint(); } }
-      else if (topic === base + "ev/" + teamParam && m.type === "pen") { penUntil = Date.now() + m.ms; navigator.vibrate && navigator.vibrate(120); paint(); tickPen(); }
       else if (topic === base + "ping/" + dev && m.sent) {
         rtts.push(performance.now() - m.sent); if (rtts.length > 7) rtts.shift();
       }
@@ -2786,8 +2761,7 @@ function runTeam(me) {
 
   function press() {
     if (!st) return;
-    if (Date.now() < penUntil) return;
-    if (pressedRound === st.round) return;
+    if (!st.open || pressedRound === st.round) return;
     pressedRound = st.round;
     navigator.vibrate && navigator.vibrate(40);
     bus.pub(base + "buzz", JSON.stringify({ id: rid(10), t: teamParam, p: me.name, r: st.round, lat: Math.round(latency()) }), { qos: 1 });
@@ -2796,21 +2770,14 @@ function runTeam(me) {
   bz.addEventListener("pointerdown", e => { e.preventDefault(); press(); });
   document.addEventListener("keydown", e => { if (e.code === "Space" && !e.repeat) { e.preventDefault(); press(); } });
 
-  function tickPen() {
-    paint();
-    if (Date.now() < penUntil) setTimeout(tickPen, 250);
-  }
   function view(cls, big, small) { bz.className = cls; bz.textContent = big; msg.textContent = small || ""; }
   function paint() {
     if (!st) return view("locked", "…", "Waiting for the host.");
-    const left = penUntil - Date.now();
-    if (left > 0) return view("pen", "TOO EARLY", `Locked for ${Math.ceil(left / 1000)}s`);
-    if (st.out.includes(teamParam)) return view("out", "LOCKED OUT", "Not this time. Wait for the next clue.");
     const i = st.order.findIndex(o => o.t === teamParam);
     if (i === 0) return st.order[0].p === me.name ? view("up", "YOU'RE UP!", "You buzzed first. Answer now.") : view("up", "TEAM UP!", `${st.order[0].p || "A teammate"} buzzed for your team.`);
-    if (i > 0) return view("later", ord(i + 1), `${nameOf(st.order[0].t)} buzzed first.`);
+    if (i > 0) return view("later", ord(i + 1), `${nameOf(st.order[0].t)} answers. Your buzz was logged.`);
     if (pressedRound === st.round && st.open) return view("later", "BUZZED", "Waiting for the host…");
-    if (st.order.length && st.open) return view("", "BUZZ", `${nameOf(st.order[0].t)} is up. You can still buzz in behind them.`);
+    if (st.order.length && st.open) return view("", "BUZZ", `${nameOf(st.order[0].t)} is answering. Buzz to be logged; only they answer.`);
     if (st.open) return view("", "BUZZ", "Buzzers are open.");
     return view("locked", "WAIT", "Buzzers are locked.");
   }
