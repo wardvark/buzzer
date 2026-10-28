@@ -61,6 +61,8 @@ label.f{display:block;font-size:13px;color:var(--mute);margin:10px 0 4px}
 
 .teamrow{display:flex;align-items:center;gap:10px;padding:6px 0;border-bottom:1px solid var(--line)}
 .teamrow input{flex:1}
+.cnt{min-width:30px;height:30px;border-radius:15px;background:var(--line);color:var(--mute);display:grid;place-items:center;font-weight:700;font-size:14px;flex:none;padding:0 6px}
+.cnt.on{background:var(--blue);color:#fff}
 .teamrow .lnk{flex:2;font-size:12px;color:var(--mute);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px}
 .tbtn{padding:16px 10px;border-radius:10px;border:2px solid var(--line);background:#fff;font-weight:700;font-size:17px;color:var(--ink)}
@@ -133,7 +135,7 @@ label.f{display:block;font-size:13px;color:var(--mute);margin:10px 0 4px}
     </div>
 
     <div class="card">
-      <h2>Teams</h2>
+      <h2>Teams <span id="totalOn" style="text-transform:none;letter-spacing:0"></span></h2>
       <div id="teams"></div>
       <div class="row" style="margin-top:10px">
         <input type="text" id="newTeam" placeholder="Add a team" style="flex:1" maxlength="30">
@@ -2600,7 +2602,7 @@ function runHost() {
     onMsg(topic, payload) {
       let m; try { m = JSON.parse(payload); } catch (e) { return; }
       if (topic === base + "buzz") onBuzz(m);
-      else if (topic === base + "hb") { lastSeen[m.t] = Date.now(); paintPresence(); }
+      else if (topic === base + "hb" && m.t && m.d) { (lastSeen[m.t] = lastSeen[m.t] || {})[m.d] = { ts: Date.now(), p: m.p || "" }; paintPresence(); }
       else if (topic === base + "state" && !adopted && Array.isArray(m.teams) && m.teams.length) {
         adopted = true;
         Object.assign(S, { teams: m.teams, open: m.open, round: m.round, order: m.order || [], v: m.v || 0 });
@@ -2674,13 +2676,20 @@ function runHost() {
       const inp = h("input", { type: "text", value: t.name, maxlength: 30, "aria-label": "Team name" });
       inp.onchange = () => { t.name = inp.value.trim() || t.name; inp.value = t.name; publish(); };
       box.append(h("div", { class: "teamrow" },
-        h("span", { class: "dot", "data-pres": t.id, title: "Seen recently" }), inp,
+        h("span", { class: "cnt", "data-pres": t.id }, "0"), inp,
         h("button", { class: "btn warn", title: "Remove team", onclick: () => { S.teams = S.teams.filter(x => x !== t); buzzes = buzzes.filter(b => b.t !== t.id); publish(); renderTeams(); } }, "×")));
     });
     paintPresence();
   }
   function paintPresence() {
-    document.querySelectorAll("[data-pres]").forEach(d => d.classList.toggle("on", Date.now() - (lastSeen[d.dataset.pres] || 0) < 25000));
+    const now = Date.now(); let total = 0;
+    document.querySelectorAll("[data-pres]").forEach(d => {
+      const live = Object.values(lastSeen[d.dataset.pres] || {}).filter(x => now - x.ts < 25000);
+      d.textContent = live.length; d.classList.toggle("on", live.length > 0);
+      d.title = live.length ? live.map(x => x.p || "(no name)").join(", ") : "Nobody connected";
+      total += live.length;
+    });
+    const t = $("#totalOn"); if (t) t.textContent = `· ${total} connected`;
   }
   setInterval(paintPresence, 3000);
   function renderQr() {
@@ -2754,7 +2763,7 @@ function runTeam(me) {
       }
     }
   });
-  const sendHb = () => bus.pub(base + "hb", JSON.stringify({ t: teamParam }), { qos: 0 });
+  const sendHb = () => bus.pub(base + "hb", JSON.stringify({ t: teamParam, d: dev, p: me.name }), { qos: 0 });
   const sendPing = () => bus.pub(base + "ping/" + dev, JSON.stringify({ sent: performance.now() }), { qos: 0 });
   setInterval(sendHb, 8000); setInterval(sendPing, 4000);
   const latency = () => { if (!rtts.length) return 0; const s = rtts.slice().sort((a, b) => a - b); return s[s.length >> 1] / 2; };
